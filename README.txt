@@ -24,13 +24,15 @@ Key Features
 
 3. Project Management
 - Admins can create projects.
+- Projects store member relationships.
 - Project cards show total tasks and actual completion progress.
 - Project detail pages show task assignment and status.
 
 4. Task Management
 - Admins can create tasks and assign them to users by email.
-- Tasks belong to projects and users.
+- Tasks belong to projects and users through projectId and assignedTo relationships.
 - Tasks support pending/done status.
+- Assigning a task adds that user as a project member.
 
 5. Dashboard
 - Admin stats show total tasks, completed, pending, and overdue.

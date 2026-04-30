@@ -26,16 +26,17 @@ const userSchema = new mongoose.Schema({
 
 // PROJECT
 const projectSchema = new mongoose.Schema({
-  name: String,
+  name: { type: String, required: true, trim: true },
+  members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }
 });
 
 // TASK
 const taskSchema = new mongoose.Schema({
-  title: String,
-  assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project" },
-  status: { type: String, default: "todo" },
+  title: { type: String, required: true, trim: true },
+  assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project", required: true },
+  status: { type: String, enum: ["todo", "done"], default: "todo" },
   deadline: Date,
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }
 });
@@ -43,6 +44,9 @@ const taskSchema = new mongoose.Schema({
 const User = mongoose.model("User", userSchema);
 const Task = mongoose.model("Task", taskSchema);
 const Project = mongoose.model("Project", projectSchema);
+
+const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+const isValidEmail = (email) => /^\S+@\S+\.\S+$/.test(email || "");
 
 // ================= AUTH =================
 
@@ -69,8 +73,14 @@ app.post("/signup", async (req, res) => {
     if (!name || !email || !password)
       return res.status(400).json({ message: "All fields required" });
 
+    if (!isValidEmail(email))
+      return res.status(400).json({ message: "Valid email required" });
+
+    if (password.length < 6)
+      return res.status(400).json({ message: "Password must be at least 6 characters" });
+
     const exists = await User.findOne({
-      $or: [{ email }, { name }]
+      $or: [{ email: email.toLowerCase().trim() }, { name: name.trim() }]
     });
 
     if (exists)
@@ -79,8 +89,8 @@ app.post("/signup", async (req, res) => {
     const hashed = await bcrypt.hash(password, 10);
 
     await User.create({
-      name,
-      email,
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
       password: hashed,
       role: role || "member"
     });
@@ -97,7 +107,13 @@ app.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email });
+    if (!email || !password)
+      return res.status(400).json({ message: "Email and password required" });
+
+    if (!isValidEmail(email))
+      return res.status(400).json({ message: "Valid email required" });
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) return res.status(400).json({ message: "User not found" });
 
     const match = await bcrypt.compare(password, user.password);
@@ -133,6 +149,7 @@ app.post("/projects", verifyToken, async (req, res) => {
 
     const project = await Project.create({
       name: req.body.name.trim(),
+      members: [],
       createdBy: req.user.id
     });
 
@@ -167,7 +184,10 @@ app.get("/projects", verifyToken, async (req, res) => {
     }
 
     const tasks = await Task.find({ assignedTo: req.user.id }).select("projectId");
-    const projectIds = [...new Set(tasks.map(task => task.projectId).filter(Boolean).map(String))];
+    const taskProjectIds = tasks.map(task => task.projectId).filter(Boolean).map(String);
+    const memberProjects = await Project.find({ members: req.user.id }).select("_id");
+    const memberProjectIds = memberProjects.map(project => project._id.toString());
+    const projectIds = [...new Set([...taskProjectIds, ...memberProjectIds])];
     const projects = await Project.find({ _id: { $in: projectIds } });
 
     res.json(await attachProgress(projects));
@@ -179,16 +199,20 @@ app.get("/projects", verifyToken, async (req, res) => {
 // GET TASKS FOR ONE PROJECT
 app.get("/projects/:id/tasks", verifyToken, async (req, res) => {
   try {
+    if (!isValidId(req.params.id))
+      return res.status(400).json({ message: "Valid project id required" });
+
     const project = await Project.findById(req.params.id);
     if (!project) return res.status(404).json({ message: "Project not found" });
 
     if (req.user.role !== "admin") {
+      const isProjectMember = project.members.some(member => member.toString() === req.user.id);
       const hasAssignedTask = await Task.exists({
         projectId: req.params.id,
         assignedTo: req.user.id
       });
 
-      if (!hasAssignedTask)
+      if (!isProjectMember && !hasAssignedTask)
         return res.status(403).json({ message: "Not allowed" });
     }
 
@@ -220,10 +244,16 @@ app.post("/tasks", verifyToken, async (req, res) => {
     if (!title || !title.trim() || !assignedEmail || !assignedEmail.trim() || !projectId)
       return res.status(400).json({ message: "Title, email, and project required" });
 
+    if (!isValidEmail(assignedEmail))
+      return res.status(400).json({ message: "Valid assigned email required" });
+
+    if (!isValidId(projectId))
+      return res.status(400).json({ message: "Valid project id required" });
+
     const project = await Project.findById(projectId);
     if (!project) return res.status(400).json({ message: "Project not found" });
 
-    const user = await User.findOne({ email: assignedEmail });
+    const user = await User.findOne({ email: assignedEmail.toLowerCase().trim() });
     if (!user) return res.status(400).json({ message: "User not found" });
 
     const task = await Task.create({
@@ -232,6 +262,10 @@ app.post("/tasks", verifyToken, async (req, res) => {
       projectId,
       deadline,
       createdBy: req.user.id
+    });
+
+    await Project.findByIdAndUpdate(project._id, {
+      $addToSet: { members: user._id }
     });
 
     res.json({ message: "Task created", task });
@@ -265,6 +299,9 @@ app.get("/tasks", verifyToken, async (req, res) => {
 
 // COMPLETE TASK
 app.put("/tasks/:id", verifyToken, async (req, res) => {
+  if (!isValidId(req.params.id))
+    return res.status(400).json({ message: "Valid task id required" });
+
   const task = await Task.findById(req.params.id);
 
   if (!task) return res.status(404).json({ message: "Task not found" });
@@ -284,7 +321,23 @@ app.delete("/tasks/:id", verifyToken, async (req, res) => {
     if (req.user.role !== "admin")
       return res.status(403).json({ message: "Admin only" });
 
-    await Task.findByIdAndDelete(req.params.id);
+    if (!isValidId(req.params.id))
+      return res.status(400).json({ message: "Valid task id required" });
+
+    const task = await Task.findByIdAndDelete(req.params.id);
+
+    if (task) {
+      const remainingAssignedTasks = await Task.exists({
+        projectId: task.projectId,
+        assignedTo: task.assignedTo
+      });
+
+      if (!remainingAssignedTasks) {
+        await Project.findByIdAndUpdate(task.projectId, {
+          $pull: { members: task.assignedTo }
+        });
+      }
+    }
 
     res.json({ message: "Task deleted" });
 
@@ -310,8 +363,12 @@ app.delete("/users/:id", verifyToken, async (req, res) => {
     if (req.user.role !== "admin")
       return res.status(403).json({ message: "Admin only" });
 
+    if (!isValidId(req.params.id))
+      return res.status(400).json({ message: "Valid user id required" });
+
     await User.findByIdAndDelete(req.params.id);
     await Task.deleteMany({ assignedTo: req.params.id });
+    await Project.updateMany({}, { $pull: { members: req.params.id } });
 
     res.json({ message: "User deleted" });
 
