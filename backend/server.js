@@ -9,6 +9,21 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+app.get("/", (req, res) => {
+  res.send("API is running 🚀");
+});
+
+app.get("/health", (req, res) => {
+  const states = ["disconnected", "connected", "connecting", "disconnecting"];
+
+  res.json({
+    api: "ok",
+    database: states[mongoose.connection.readyState] || "unknown",
+    hasMongoUri: Boolean(process.env.MONGO_URI),
+    hasJwtSecret: Boolean(process.env.JWT_SECRET)
+  });
+});
+
 // ================= DB =================
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
@@ -47,6 +62,14 @@ const Project = mongoose.model("Project", projectSchema);
 
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 const isValidEmail = (email) => /^\S+@\S+\.\S+$/.test(email || "");
+const isDatabaseConnected = () => mongoose.connection.readyState === 1;
+
+const authErrorMessage = (err, fallback) => {
+  if (err?.code === 11000) return "User already exists";
+  if (err?.name === "ValidationError") return Object.values(err.errors).map(error => error.message).join(", ");
+  if (err?.name === "MongooseError" || err?.name === "MongoServerSelectionError") return "Database not connected";
+  return fallback;
+};
 
 // ================= AUTH =================
 
@@ -79,6 +102,9 @@ app.post("/signup", async (req, res) => {
     if (password.length < 6)
       return res.status(400).json({ message: "Password must be at least 6 characters" });
 
+    if (!isDatabaseConnected())
+      return res.status(503).json({ message: "Database not connected" });
+
     const exists = await User.findOne({
       $or: [{ email: email.toLowerCase().trim() }, { name: name.trim() }]
     });
@@ -97,8 +123,11 @@ app.post("/signup", async (req, res) => {
 
     res.json({ message: "Signup successful" });
 
-  } catch {
-    res.status(500).json({ message: "Signup failed" });
+  } catch (err) {
+    console.error("Signup failed:", err);
+    res.status(err?.code === 11000 || err?.name === "ValidationError" ? 400 : 500).json({
+      message: authErrorMessage(err, "Signup failed")
+    });
   }
 });
 
@@ -112,6 +141,9 @@ app.post("/login", async (req, res) => {
 
     if (!isValidEmail(email))
       return res.status(400).json({ message: "Valid email required" });
+
+    if (!isDatabaseConnected())
+      return res.status(503).json({ message: "Database not connected" });
 
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) return res.status(400).json({ message: "User not found" });
@@ -131,8 +163,9 @@ app.post("/login", async (req, res) => {
       email: user.email
     });
 
-  } catch {
-    res.status(500).json({ message: "Login failed" });
+  } catch (err) {
+    console.error("Login failed:", err);
+    res.status(500).json({ message: authErrorMessage(err, "Login failed") });
   }
 });
 
@@ -396,9 +429,6 @@ app.get("/dashboard", verifyToken, async (req, res) => {
   });
 });
 
-app.get("/", (req, res) => {
-  res.send("API is running 🚀");
-});
-
 // ================= SERVER =================
-app.listen(5000, () => console.log("Server running on 5000"));
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));

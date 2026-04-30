@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 
-const API = "taskmanager-production-9f28.up.railway.app";
+const configuredApiUrl = process.env.REACT_APP_API_URL;
+const defaultApiUrl = window.location.hostname === "localhost"
+  ? "http://localhost:5000"
+  : "https://taskmanager-production-9f28.up.railway.app";
+const API = configuredApiUrl
+  ? `${configuredApiUrl.startsWith("http") ? configuredApiUrl : `https://${configuredApiUrl}`}`.replace(/\/$/, "")
+  : defaultApiUrl;
 
 const emptyForm = {
   projectName: "",
