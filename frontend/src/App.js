@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 
-const API = "http://localhost:5000";
+const API = "https://taskmanager-2lqc.onrender.com";
 
 const emptyForm = {
   projectName: "",
