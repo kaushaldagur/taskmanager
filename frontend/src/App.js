@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 
-const API = "https://taskmanager-2lqc.onrender.com";
+const API = "taskmanager-production-9f28.up.railway.app";
 
 const emptyForm = {
   projectName: "",
