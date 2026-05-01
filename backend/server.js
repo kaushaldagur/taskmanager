@@ -9,6 +9,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const DB_NAME = process.env.DB_NAME || "taskmanager";
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-in-production";
+const rawMongoUri = process.env.MONGO_URI || "";
+const MONGO_URI = rawMongoUri.replace(/^MONGO_URI=/, "").trim();
 
 app.use(cors());
 app.use(express.json());
@@ -77,13 +79,17 @@ const Task = mongoose.model("Task", taskSchema);
 // ================= DB =================
 
 const connectDb = async () => {
-  if (!process.env.MONGO_URI) {
+  if (!MONGO_URI) {
     console.error("MONGO_URI is missing");
     return;
   }
 
   try {
-    await mongoose.connect(process.env.MONGO_URI, {
+    if (rawMongoUri !== MONGO_URI) {
+      console.warn("MONGO_URI contained a leading MONGO_URI= prefix; using sanitized value.");
+    }
+
+    await mongoose.connect(MONGO_URI, {
       dbName: DB_NAME,
       serverSelectionTimeoutMS: 10000
     });
@@ -110,8 +116,9 @@ app.get("/health", (req, res) => {
     api: "ok",
     database: connectionStates[mongoose.connection.readyState] || "unknown",
     databaseName: mongoose.connection.name || DB_NAME,
-    hasMongoUri: Boolean(process.env.MONGO_URI),
+    hasMongoUri: Boolean(MONGO_URI),
     hasJwtSecret: Boolean(process.env.JWT_SECRET),
+    mongoUriLooksValid: MONGO_URI.startsWith("mongodb://") || MONGO_URI.startsWith("mongodb+srv://"),
     port: PORT
   });
 });
